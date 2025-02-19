@@ -9,21 +9,31 @@ import plotly.express as px
 from supabase import create_client, Client
 import openai
 import json
+from dotenv import load_dotenv  # Render 以外の環境（ローカル）用
 
-# ✅ 環境変数を読み込む（エラーハンドリング付き）
-try:
-    SUPABASE_URL = os.getenv["SUPABASE_URL"]
-    SUPABASE_KEY = os.getenv["SUPABASE_KEY"]
-    OPENAI_API_KEY = os.getenv["OPENAI_API_KEY"]
-except KeyError:
-    st.error("🔴 環境変数（SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY）が設定されていません！")
+# ✅ .env から環境変数をロード（Render 以外のローカル環境用）
+load_dotenv()
+
+# ✅ 環境変数を読み込む
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# ✅ デバッグ用：環境変数の確認
+st.write("DEBUG - SUPABASE_URL:", SUPABASE_URL)
+st.write("DEBUG - SUPABASE_KEY:", SUPABASE_KEY)
+st.write("DEBUG - OPENAI_API_KEY:", OPENAI_API_KEY)
+
+# ✅ 環境変数が取得できていない場合のエラーハンドリング
+if not SUPABASE_URL or not SUPABASE_KEY or not OPENAI_API_KEY:
+    st.error("❌ 環境変数が正しく設定されていません！Render の Environment Variables を確認してください。")
     st.stop()
 
 # ✅ Supabase クライアントを作成
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ✅ OpenAI API クライアントの作成（新しいバージョンに対応）
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+# ✅ OpenAI API キーの設定
+openai.api_key = OPENAI_API_KEY
 
 # ✅ Mediapipe のセットアップ
 mp_pose = mp.solutions.pose
@@ -108,15 +118,9 @@ if uploaded_file:
         with open(output_video_path, "rb") as file:
             st.download_button("📥 解析動画をダウンロード", file, file_name="walking_analysis.mp4", mime="video/mp4")
 
-        # ✅ 歩行スコアを計算（安全な計算処理に修正）
+        # ✅ 歩行スコアを計算
         def calculate_gait_scores(df):
             scores = {}
-            if df.empty:
-                scores["Stability Score"] = 0
-                scores["Gait Rhythm Score"] = 0
-                scores["Symmetry Score"] = 0
-                return scores
-
             scores["Stability Score"] = max(0, 100 - (df["LEFT_KNEE_Y"].std() + df["RIGHT_KNEE_Y"].std()) * 50)
             step_intervals = np.diff(df["Time (s)"])
             scores["Gait Rhythm Score"] = max(0, 100 - np.std(step_intervals) * 500)
@@ -126,27 +130,23 @@ if uploaded_file:
         scores = calculate_gait_scores(df)
         st.metric(label="歩行安定度スコア", value=f"{scores['Stability Score']:.1f} / 100")
 
-        # ✅ AI に解析データを送信し、解説を取得（新しい OpenAI API 形式）
+        # ✅ AI に解析データを送信し、解説を取得
         def generate_ai_analysis(scores_json):
             prompt = f"""
             あなたは歩行解析の専門家です。
             以下の解析結果をわかりやすく解説してください：
             {json.dumps(scores_json, indent=2, ensure_ascii=False)}
-            どのスコアが良く、どのスコアが改善の余地があるか説明してください。
             """
 
-            response = client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "あなたは歩行解析の専門家です。"},
                     {"role": "user", "content": prompt}
                 ]
             )
-
-            return response.choices[0].message.content
+            return response["choices"][0]["message"]["content"]
 
         ai_analysis = generate_ai_analysis(scores)
-
         st.subheader("📖 AI による解析解説")
         st.write(ai_analysis)
-
